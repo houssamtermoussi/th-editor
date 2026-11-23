@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=HT Photo
+Comment=Éditeur photo local — filtres, recadrage et outils
+Exec=ht_editor
+Icon=ht-photo
+Terminal=false
+Categories=Graphics;Photography;2DGraphics;
+StartupWMClass=ht-photo

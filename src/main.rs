@@ -7,11 +7,16 @@ mod image_doc;
 fn main() -> eframe::Result {
     env_logger::init();
 
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/logo.png"))
+        .expect("logo.png invalide");
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([800.0, 500.0])
-            .with_title("HT Photo — Éditeur photo local"),
+            .with_title("HT Photo — Éditeur photo local")
+            .with_app_id("ht-photo")
+            .with_icon(icon),
         ..Default::default()
     };
 
