@@ -2,7 +2,7 @@
 name = "ht_editor"
 version = "0.1.0"
 edition = "2024"
-description = "Desktop application built with Rust (egui/eframe)"
+description = "Éditeur photo desktop local — filtres, recadrage et outils"
 authors = ["houssam"]
 
 [dependencies]
@@ -10,6 +10,14 @@ eframe = { version = "0.33", default-features = true, features = ["wayland", "x1
 egui = "0.33"
 env_logger = "0.11"
 log = "0.4"
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "gif",
+    "bmp",
+    "webp",
+] }
+rfd = "0.15"
 
 [profile.release]
 lto = true
