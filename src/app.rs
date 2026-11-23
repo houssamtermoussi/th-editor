@@ -59,6 +59,8 @@ enum Action {
     SetTool(Tool),
     Transform(Transform, &'static str),
     Filter(PhotoFilter),
+    ClearFilter,
+    CommitFilter,
     SetAdjustments(Adjustments),
     CommitAdjustments,
     ResetAdjustments,
@@ -133,8 +135,8 @@ impl HtEditorApp {
             self.status = "Aucune image ouverte".into();
             return;
         };
-        // Bake pending adjustments before save.
-        if !doc.adjustments.is_identity() {
+        // Bake pending adjustments/filter before save.
+        if doc.has_pending() {
             doc.commit_preview();
         }
         let default_name = doc
@@ -228,8 +230,33 @@ impl HtEditorApp {
             }
             Action::Filter(filter) => {
                 if let Some(doc) = self.doc.as_mut() {
-                    doc.apply_transform(|img| filter.apply(img));
-                    self.status = format!("Filtre appliqué : {}", filter.label());
+                    // Reversible preview: clicking the active filter again removes it.
+                    if doc.active_filter == Some(filter) {
+                        doc.set_filter(None);
+                        self.status = "Filtre retiré".into();
+                    } else {
+                        doc.set_filter(Some(filter));
+                        self.status =
+                            format!("Aperçu : {} — recliquez pour revenir en arrière", filter.label());
+                    }
+                }
+            }
+            Action::ClearFilter => {
+                if let Some(doc) = self.doc.as_mut() {
+                    doc.set_filter(None);
+                    self.status = "Filtre retiré".into();
+                }
+            }
+            Action::CommitFilter => {
+                if let Some(doc) = self.doc.as_mut() {
+                    let label = doc.active_filter.map(|f| f.label());
+                    doc.commit_preview();
+                    self.status = match label {
+                        Some(label) => {
+                            format!("Filtre appliqué : {label} (Ctrl+Z pour annuler)")
+                        }
+                        None => "Aucun filtre à appliquer".into(),
+                    };
                 }
             }
             Action::SetAdjustments(adj) => {
@@ -823,9 +850,14 @@ fn adjust_slider(ui: &mut egui::Ui, label: &str, value: &mut f32) -> bool {
 
 fn filters_card(ui: &mut egui::Ui, ctx: &egui::Context, doc: &mut ImageDoc, actions: &mut Vec<Action>) {
     let thumbs = doc.filter_thumb_ids(ctx);
+    let active = doc.active_filter;
     theme::card().show(ui, |ui| {
         ui.set_width(ui.available_width());
-        theme::section_title(ui, "Filtres", "Cliquez sur un aperçu pour l'appliquer");
+        theme::section_title(
+            ui,
+            "Filtres",
+            "Aperçu réversible · recliquez sur le filtre actif ou sur « Aucun » pour revenir en arrière",
+        );
 
         const COLUMNS: usize = 3;
         let gap = 8.0;
@@ -834,16 +866,55 @@ fn filters_card(ui: &mut egui::Ui, ctx: &egui::Context, doc: &mut ImageDoc, acti
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = gap;
                 for (filter, tex_id) in row {
-                    if filter_tile(ui, *tex_id, filter.label(), tile).clicked() {
-                        actions.push(Action::Filter(*filter));
+                    let label = filter.map_or("Aucun", |f| f.label());
+                    let selected = active == *filter;
+                    if filter_tile(ui, *tex_id, label, tile, selected).clicked() {
+                        match filter {
+                            Some(f) => actions.push(Action::Filter(*f)),
+                            None => actions.push(Action::ClearFilter),
+                        }
                     }
+                }
+            });
+        }
+
+        if let Some(filter) = active {
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(format!("En aperçu : {} (non appliqué)", filter.label()))
+                    .small()
+                    .color(theme::ACCENT),
+            );
+            ui.add_space(4.0);
+            let width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
+            let size = Vec2::new(width, 32.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add(egui::Button::new("↩  Retirer").min_size(size))
+                    .on_hover_text("Revenir à l'image sans filtre")
+                    .clicked()
+                {
+                    actions.push(Action::ClearFilter);
+                }
+                if ui
+                    .add(theme::primary_button("Appliquer").min_size(size))
+                    .on_hover_text("Valider le filtre (annulable ensuite avec Ctrl+Z)")
+                    .clicked()
+                {
+                    actions.push(Action::CommitFilter);
                 }
             });
         }
     });
 }
 
-fn filter_tile(ui: &mut egui::Ui, tex_id: egui::TextureId, label: &str, size: f32) -> egui::Response {
+fn filter_tile(
+    ui: &mut egui::Ui,
+    tex_id: egui::TextureId,
+    label: &str,
+    size: f32,
+    selected: bool,
+) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(size, size + 20.0), Sense::click());
     let response = response.on_hover_cursor(CursorIcon::PointingHand);
     let img_rect = Rect::from_min_size(rect.min, Vec2::splat(size));
@@ -852,19 +923,35 @@ fn filter_tile(ui: &mut egui::Ui, tex_id: egui::TextureId, label: &str, size: f3
     egui::Image::new((tex_id, img_rect.size()))
         .corner_radius(theme::RADIUS)
         .paint_at(ui, img_rect);
-    let stroke = if hovered {
+    let stroke = if selected || hovered {
         Stroke::new(2.0_f32, theme::ACCENT)
     } else {
         Stroke::new(1.0_f32, theme::BORDER)
     };
     ui.painter()
         .rect_stroke(img_rect, theme::RADIUS, stroke, StrokeKind::Inside);
+    if selected {
+        // Check badge so the active filter is visible at a glance.
+        let badge_rect = Rect::from_min_size(
+            img_rect.min + Vec2::new(4.0, 4.0),
+            Vec2::splat(18.0),
+        );
+        ui.painter().circle_filled(badge_rect.center(), 9.0, theme::ACCENT);
+        ui.painter().text(
+            badge_rect.center(),
+            Align2::CENTER_CENTER,
+            "✓",
+            FontId::proportional(12.0),
+            Color32::WHITE,
+        );
+    }
+    let label = if selected { format!("✓ {label}") } else { label.to_owned() };
     ui.painter().text(
         Pos2::new(rect.center().x, img_rect.max.y + 10.0),
         Align2::CENTER_CENTER,
         label,
         FontId::proportional(11.5),
-        if hovered { theme::TEXT } else { theme::TEXT_DIM },
+        if selected || hovered { theme::TEXT } else { theme::TEXT_DIM },
     );
     response
 }

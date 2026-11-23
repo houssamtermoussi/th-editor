@@ -18,7 +18,10 @@ pub struct ImageDoc {
     history: Vec<RgbaImage>,
     redo_stack: Vec<RgbaImage>,
     pub adjustments: Adjustments,
-    /// Cached preview = adjustments applied on base.
+    /// Filter shown as a live, reversible preview on top of `base`
+    /// (like `adjustments`): not baked into the pixels until committed.
+    pub active_filter: Option<PhotoFilter>,
+    /// Cached preview = active filter applied over adjustments applied on base.
     preview: RgbaImage,
     texture: Option<TextureHandle>,
     texture_dirty: bool,
@@ -38,6 +41,7 @@ impl ImageDoc {
             history: Vec::new(),
             redo_stack: Vec::new(),
             adjustments: Adjustments::default(),
+            active_filter: None,
             preview,
             texture: None,
             texture_dirty: true,
@@ -80,14 +84,35 @@ impl ImageDoc {
         self.redo_stack.clear();
     }
 
-    /// Commit current preview as new base (e.g. after Apply adjustments).
+    /// Live edits not yet baked into `base` (adjustments and/or filter preview).
+    pub fn has_pending(&self) -> bool {
+        !self.adjustments.is_identity() || self.active_filter.is_some()
+    }
+
+    /// Select a filter as a reversible preview, or `None` to go back to
+    /// the image without any filter. Never touches `base`/history, so
+    /// switching or clearing the filter always restores the previous look.
+    pub fn set_filter(&mut self, filter: Option<PhotoFilter>) {
+        if self.active_filter == filter {
+            return;
+        }
+        self.active_filter = filter;
+        self.recompute_preview();
+    }
+
+    /// Commit current preview as new base (e.g. after Apply adjustments/filter).
+    /// Pushes history, so a committed edit can still be undone with Ctrl+Z.
     pub fn commit_preview(&mut self) {
-        if self.preview.as_raw() == self.base.as_raw() && self.adjustments.is_identity() {
+        if !self.has_pending() || self.preview.as_raw() == self.base.as_raw() {
+            // Nothing to bake; drop the pending state so callers stay clean.
+            self.adjustments = Adjustments::default();
+            self.active_filter = None;
             return;
         }
         self.push_history();
         self.base = self.preview.clone();
         self.adjustments = Adjustments::default();
+        self.active_filter = None;
         self.dirty = true;
         self.mark_pixels_changed();
     }
@@ -97,14 +122,13 @@ impl ImageDoc {
     where
         F: FnOnce(&RgbaImage) -> RgbaImage,
     {
-        // Bake pending adjustments first so they aren't lost.
-        if !self.adjustments.is_identity() {
-            self.preview = filters::apply_adjustments(&self.base, &self.adjustments);
-            self.push_history();
+        // Bake pending adjustments/filter first so they aren't lost.
+        // A single history entry: undo returns to before both bake and transform.
+        self.push_history();
+        if self.has_pending() {
             self.base = self.preview.clone();
             self.adjustments = Adjustments::default();
-        } else {
-            self.push_history();
+            self.active_filter = None;
         }
         self.base = f(&self.base);
         self.preview = self.base.clone();
@@ -113,7 +137,11 @@ impl ImageDoc {
     }
 
     pub fn recompute_preview(&mut self) {
-        self.preview = filters::apply_adjustments(&self.base, &self.adjustments);
+        let adjusted = filters::apply_adjustments(&self.base, &self.adjustments);
+        self.preview = match self.active_filter {
+            Some(filter) => filter.apply(&adjusted),
+            None => adjusted,
+        };
         self.mark_pixels_changed();
     }
 
@@ -122,6 +150,7 @@ impl ImageDoc {
             self.redo_stack.push(self.base.clone());
             self.base = prev;
             self.adjustments = Adjustments::default();
+            self.active_filter = None;
             self.preview = self.base.clone();
             self.dirty = true;
             self.mark_pixels_changed();
@@ -133,6 +162,7 @@ impl ImageDoc {
             self.history.push(self.base.clone());
             self.base = next;
             self.adjustments = Adjustments::default();
+            self.active_filter = None;
             self.preview = self.base.clone();
             self.dirty = true;
             self.mark_pixels_changed();
@@ -140,12 +170,13 @@ impl ImageDoc {
     }
 
     pub fn reset_to_original(&mut self) {
-        if self.base.as_raw() == self.original.as_raw() && self.adjustments.is_identity() {
+        if self.base.as_raw() == self.original.as_raw() && !self.has_pending() {
             return;
         }
         self.push_history();
         self.base = self.original.clone();
         self.adjustments = Adjustments::default();
+        self.active_filter = None;
         self.preview = self.base.clone();
         self.dirty = true;
         self.mark_pixels_changed();
@@ -171,12 +202,25 @@ impl ImageDoc {
         self.texture.as_ref().expect("texture just ensured")
     }
 
-    /// Texture IDs for each [`PhotoFilter::ALL`] entry, rebuilt when the preview changes.
-    pub fn filter_thumb_ids(&mut self, ctx: &egui::Context) -> Vec<(PhotoFilter, egui::TextureId)> {
-        if self.filter_thumbs_dirty || self.filter_thumbs.len() != PhotoFilter::ALL.len() {
-            let thumb = make_square_thumb(&self.preview, FILTER_THUMB_SIZE);
-            for (i, filter) in PhotoFilter::ALL.iter().enumerate() {
-                let filtered = filter.apply(&thumb);
+    /// Preview without the active filter, so thumbnails show the effect of
+    /// each filter from the same starting point (never double-filtered).
+    fn unfiltered_preview(&self) -> RgbaImage {
+        filters::apply_adjustments(&self.base, &self.adjustments)
+    }
+
+    /// Texture IDs for the "Aucun" tile (`None`) plus each [`PhotoFilter::ALL`]
+    /// entry, rebuilt when the underlying image changes.
+    pub fn filter_thumb_ids(
+        &mut self,
+        ctx: &egui::Context,
+    ) -> Vec<(Option<PhotoFilter>, egui::TextureId)> {
+        let count = PhotoFilter::ALL.len() + 1;
+        if self.filter_thumbs_dirty || self.filter_thumbs.len() != count {
+            let thumb = make_square_thumb(&self.unfiltered_preview(), FILTER_THUMB_SIZE);
+            let variants: Vec<RgbaImage> = std::iter::once(thumb.clone())
+                .chain(PhotoFilter::ALL.iter().map(|f| f.apply(&thumb)))
+                .collect();
+            for (i, filtered) in variants.iter().enumerate() {
                 let color = ColorImage::from_rgba_unmultiplied(
                     [filtered.width() as usize, filtered.height() as usize],
                     filtered.as_raw(),
@@ -189,13 +233,13 @@ impl ImageDoc {
                         .push(ctx.load_texture(name, color, TextureOptions::LINEAR));
                 }
             }
-            self.filter_thumbs.truncate(PhotoFilter::ALL.len());
+            self.filter_thumbs.truncate(count);
             self.filter_thumbs_dirty = false;
         }
-        PhotoFilter::ALL
-            .iter()
+        std::iter::once(None)
+            .chain(PhotoFilter::ALL.iter().copied().map(Some))
             .zip(self.filter_thumbs.iter())
-            .map(|(f, t)| (*f, t.id()))
+            .map(|(f, t)| (f, t.id()))
             .collect()
     }
 }
