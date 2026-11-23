@@ -3,6 +3,7 @@
 mod app;
 mod filters;
 mod image_doc;
+mod theme;
 
 fn main() -> eframe::Result {
     env_logger::init();
