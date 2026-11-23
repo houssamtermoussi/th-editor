@@ -14,14 +14,14 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([800.0, 500.0])
-            .with_title("HT Photo — Éditeur photo local")
-            .with_app_id("ht-photo")
+            .with_title("HT Editor — Éditeur photo local")
+            .with_app_id("ht-editor")
             .with_icon(icon),
         ..Default::default()
     };
 
     eframe::run_native(
-        "HT Photo",
+        "HT Editor",
         options,
         Box::new(|cc| Ok(Box::new(app::HtEditorApp::new(cc)))),
     )
