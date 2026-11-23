@@ -4,7 +4,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use image::ImageReader;
 use rfd::FileDialog;
 
-use crate::filters::{self, Adjustments};
+use crate::filters::{self, Adjustments, PhotoFilter};
 use crate::image_doc::ImageDoc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -387,25 +387,26 @@ impl eframe::App for HtEditorApp {
                 ui.heading("Filtres");
                 ui.add_space(6.0);
 
-                if ui.button("Noir & blanc").clicked() {
-                    doc.apply_transform(filters::grayscale);
-                    self.status = "Filtre: N&B".into();
-                }
-                if ui.button("Sépia").clicked() {
-                    doc.apply_transform(filters::sepia);
-                    self.status = "Filtre: sépia".into();
-                }
-                if ui.button("Négatif").clicked() {
-                    doc.apply_transform(filters::invert);
-                    self.status = "Filtre: négatif".into();
-                }
-                if ui.button("Flou léger").clicked() {
-                    doc.apply_transform(|img| filters::blur(img, 2.0));
-                    self.status = "Filtre: flou".into();
-                }
-                if ui.button("Netteté").clicked() {
-                    doc.apply_transform(filters::sharpen);
-                    self.status = "Filtre: netteté".into();
+                let thumbs = doc.filter_thumb_ids(ctx);
+                let thumb_size = Vec2::splat(72.0);
+                let mut clicked_filter: Option<PhotoFilter> = None;
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = Vec2::splat(8.0);
+                    for (filter, tex_id) in &thumbs {
+                        let response = ui.add(
+                            egui::Button::image((*tex_id, thumb_size)).corner_radius(6.0),
+                        );
+                        if response.clicked() {
+                            clicked_filter = Some(*filter);
+                        }
+                        response.on_hover_text(filter.label());
+                    }
+                });
+
+                if let Some(filter) = clicked_filter {
+                    doc.apply_transform(|img| filter.apply(img));
+                    self.status = format!("Filtre: {}", filter.label());
                 }
 
                 ui.add_space(12.0);

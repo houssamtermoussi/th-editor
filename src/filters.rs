@@ -1,5 +1,45 @@
 use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage, imageops};
 
+/// Named photo filters shown as clickable previews in the side panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhotoFilter {
+    Grayscale,
+    Sepia,
+    Invert,
+    SoftBlur,
+    Sharpen,
+}
+
+impl PhotoFilter {
+    pub const ALL: &'static [Self] = &[
+        Self::Grayscale,
+        Self::Sepia,
+        Self::Invert,
+        Self::SoftBlur,
+        Self::Sharpen,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Grayscale => "Noir & blanc",
+            Self::Sepia => "Sépia",
+            Self::Invert => "Négatif",
+            Self::SoftBlur => "Flou léger",
+            Self::Sharpen => "Netteté",
+        }
+    }
+
+    pub fn apply(self, src: &RgbaImage) -> RgbaImage {
+        match self {
+            Self::Grayscale => grayscale(src),
+            Self::Sepia => sepia(src),
+            Self::Invert => invert(src),
+            Self::SoftBlur => blur(src, 2.0),
+            Self::Sharpen => sharpen(src),
+        }
+    }
+}
+
 /// Adjustments applied live via sliders (non-destructive until "Apply").
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Adjustments {

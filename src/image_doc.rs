@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
 use egui::{ColorImage, TextureHandle, TextureOptions};
-use image::RgbaImage;
+use image::{RgbaImage, imageops};
 
-use crate::filters::{self, Adjustments};
+use crate::filters::{self, Adjustments, PhotoFilter};
 
 const MAX_HISTORY: usize = 30;
+const FILTER_THUMB_SIZE: u32 = 72;
 
 /// Document holding the working image, history, and preview texture.
 pub struct ImageDoc {
@@ -21,6 +22,8 @@ pub struct ImageDoc {
     preview: RgbaImage,
     texture: Option<TextureHandle>,
     texture_dirty: bool,
+    filter_thumbs: Vec<TextureHandle>,
+    filter_thumbs_dirty: bool,
     pub dirty: bool,
 }
 
@@ -38,8 +41,15 @@ impl ImageDoc {
             preview,
             texture: None,
             texture_dirty: true,
+            filter_thumbs: Vec::new(),
+            filter_thumbs_dirty: true,
             dirty: false,
         }
+    }
+
+    fn mark_pixels_changed(&mut self) {
+        self.texture_dirty = true;
+        self.filter_thumbs_dirty = true;
     }
 
     pub fn width(&self) -> u32 {
@@ -79,7 +89,7 @@ impl ImageDoc {
         self.base = self.preview.clone();
         self.adjustments = Adjustments::default();
         self.dirty = true;
-        self.texture_dirty = true;
+        self.mark_pixels_changed();
     }
 
     /// Apply a destructive transform on the committed base.
@@ -99,12 +109,12 @@ impl ImageDoc {
         self.base = f(&self.base);
         self.preview = self.base.clone();
         self.dirty = true;
-        self.texture_dirty = true;
+        self.mark_pixels_changed();
     }
 
     pub fn recompute_preview(&mut self) {
         self.preview = filters::apply_adjustments(&self.base, &self.adjustments);
-        self.texture_dirty = true;
+        self.mark_pixels_changed();
     }
 
     pub fn undo(&mut self) {
@@ -114,7 +124,7 @@ impl ImageDoc {
             self.adjustments = Adjustments::default();
             self.preview = self.base.clone();
             self.dirty = true;
-            self.texture_dirty = true;
+            self.mark_pixels_changed();
         }
     }
 
@@ -125,7 +135,7 @@ impl ImageDoc {
             self.adjustments = Adjustments::default();
             self.preview = self.base.clone();
             self.dirty = true;
-            self.texture_dirty = true;
+            self.mark_pixels_changed();
         }
     }
 
@@ -138,7 +148,7 @@ impl ImageDoc {
         self.adjustments = Adjustments::default();
         self.preview = self.base.clone();
         self.dirty = true;
-        self.texture_dirty = true;
+        self.mark_pixels_changed();
     }
 
     pub fn texture(&mut self, ctx: &egui::Context) -> &TextureHandle {
@@ -160,4 +170,44 @@ impl ImageDoc {
         }
         self.texture.as_ref().expect("texture just ensured")
     }
+
+    /// Texture IDs for each [`PhotoFilter::ALL`] entry, rebuilt when the preview changes.
+    pub fn filter_thumb_ids(&mut self, ctx: &egui::Context) -> Vec<(PhotoFilter, egui::TextureId)> {
+        if self.filter_thumbs_dirty || self.filter_thumbs.len() != PhotoFilter::ALL.len() {
+            let thumb = make_square_thumb(&self.preview, FILTER_THUMB_SIZE);
+            for (i, filter) in PhotoFilter::ALL.iter().enumerate() {
+                let filtered = filter.apply(&thumb);
+                let color = ColorImage::from_rgba_unmultiplied(
+                    [filtered.width() as usize, filtered.height() as usize],
+                    filtered.as_raw(),
+                );
+                let name = format!("filter_thumb_{i}");
+                if let Some(tex) = self.filter_thumbs.get_mut(i) {
+                    tex.set(color, TextureOptions::LINEAR);
+                } else {
+                    self.filter_thumbs
+                        .push(ctx.load_texture(name, color, TextureOptions::LINEAR));
+                }
+            }
+            self.filter_thumbs.truncate(PhotoFilter::ALL.len());
+            self.filter_thumbs_dirty = false;
+        }
+        PhotoFilter::ALL
+            .iter()
+            .zip(self.filter_thumbs.iter())
+            .map(|(f, t)| (*f, t.id()))
+            .collect()
+    }
+}
+
+fn make_square_thumb(src: &RgbaImage, size: u32) -> RgbaImage {
+    let (w, h) = src.dimensions();
+    if w == 0 || h == 0 {
+        return RgbaImage::new(size, size);
+    }
+    let side = w.min(h);
+    let x = (w - side) / 2;
+    let y = (h - side) / 2;
+    let cropped = imageops::crop_imm(src, x, y, side, side).to_image();
+    imageops::thumbnail(&cropped, size, size)
 }
