@@ -1,0 +1,17 @@
+[package]
+name = "ht_editor"
+version = "0.1.0"
+edition = "2024"
+description = "Desktop application built with Rust (egui/eframe)"
+authors = ["houssam"]
+
+[dependencies]
+eframe = { version = "0.33", default-features = true, features = ["wayland", "x11"] }
+egui = "0.33"
+env_logger = "0.11"
+log = "0.4"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
