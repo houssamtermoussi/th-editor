@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use egui::{ColorImage, TextureHandle, TextureOptions};
+use egui::{ColorImage, Pos2, TextureHandle, TextureOptions};
 use image::{RgbaImage, imageops};
 
 use crate::filters::{self, Adjustments, PhotoFilter};
@@ -25,8 +25,10 @@ pub struct ImageDoc {
     preview: RgbaImage,
     texture: Option<TextureHandle>,
     texture_dirty: bool,
+    original_texture: Option<TextureHandle>,
     filter_thumbs: Vec<TextureHandle>,
     filter_thumbs_dirty: bool,
+    stroking: bool,
     pub dirty: bool,
 }
 
@@ -45,8 +47,10 @@ impl ImageDoc {
             preview,
             texture: None,
             texture_dirty: true,
+            original_texture: None,
             filter_thumbs: Vec::new(),
             filter_thumbs_dirty: true,
+            stroking: false,
             dirty: false,
         }
     }
@@ -56,16 +60,31 @@ impl ImageDoc {
         self.filter_thumbs_dirty = true;
     }
 
+    /// Pixels currently shown: the live preview while adjustments or a filter
+    /// are pending, otherwise the committed base (so a brush stroke is visible
+    /// without cloning the buffer on every move).
+    fn shown(&self) -> &RgbaImage {
+        if self.has_pending() {
+            &self.preview
+        } else {
+            &self.base
+        }
+    }
+
     pub fn width(&self) -> u32 {
-        self.preview.width()
+        self.shown().width()
     }
 
     pub fn height(&self) -> u32 {
-        self.preview.height()
+        self.shown().height()
     }
 
     pub fn preview(&self) -> &RgbaImage {
-        &self.preview
+        self.shown()
+    }
+
+    pub fn original_size(&self) -> (u32, u32) {
+        self.original.dimensions()
     }
 
     pub fn can_undo(&self) -> bool {
@@ -103,6 +122,7 @@ impl ImageDoc {
     /// Commit current preview as new base (e.g. after Apply adjustments/filter).
     /// Pushes history, so a committed edit can still be undone with Ctrl+Z.
     pub fn commit_preview(&mut self) {
+        self.stroking = false;
         if !self.has_pending() || self.preview.as_raw() == self.base.as_raw() {
             // Nothing to bake; drop the pending state so callers stay clean.
             self.adjustments = Adjustments::default();
@@ -117,11 +137,48 @@ impl ImageDoc {
         self.mark_pixels_changed();
     }
 
+    /// One history entry for the whole gesture. Pending adjustments are baked
+    /// in so the stroke lands on the image the user is looking at.
+    pub fn begin_stroke(&mut self) {
+        if self.stroking {
+            return;
+        }
+        self.push_history();
+        if self.has_pending() {
+            self.base = self.preview.clone();
+            self.adjustments = Adjustments::default();
+            self.active_filter = None;
+        }
+        self.stroking = true;
+        self.dirty = true;
+    }
+
+    pub fn paint_stroke(&mut self, from: Pos2, to: Pos2, radius: f32, color: [u8; 4], erase: bool) {
+        if !self.stroking {
+            self.begin_stroke();
+        }
+        filters::stroke_line(
+            &mut self.base,
+            (from.x, from.y),
+            (to.x, to.y),
+            radius,
+            color,
+            erase,
+        );
+        self.dirty = true;
+        self.mark_pixels_changed();
+    }
+
+    pub fn end_stroke(&mut self) {
+        self.stroking = false;
+    }
+
     /// Apply a destructive transform on the committed base.
     pub fn apply_transform<F>(&mut self, f: F)
     where
         F: FnOnce(&RgbaImage) -> RgbaImage,
     {
+        self.stroking = false;
         // Bake pending adjustments/filter first so they aren't lost.
         // A single history entry: undo returns to before both bake and transform.
         self.push_history();
@@ -146,6 +203,7 @@ impl ImageDoc {
     }
 
     pub fn undo(&mut self) {
+        self.stroking = false;
         if let Some(prev) = self.history.pop() {
             self.redo_stack.push(self.base.clone());
             self.base = prev;
@@ -158,6 +216,7 @@ impl ImageDoc {
     }
 
     pub fn redo(&mut self) {
+        self.stroking = false;
         if let Some(next) = self.redo_stack.pop() {
             self.history.push(self.base.clone());
             self.base = next;
@@ -170,6 +229,7 @@ impl ImageDoc {
     }
 
     pub fn reset_to_original(&mut self) {
+        self.stroking = false;
         if self.base.as_raw() == self.original.as_raw() && !self.has_pending() {
             return;
         }
@@ -184,22 +244,41 @@ impl ImageDoc {
 
     pub fn texture(&mut self, ctx: &egui::Context) -> &TextureHandle {
         if self.texture_dirty || self.texture.is_none() {
-            let color = ColorImage::from_rgba_unmultiplied(
-                [self.preview.width() as usize, self.preview.height() as usize],
-                self.preview.as_raw(),
-            );
+            let color = {
+                let shown = self.shown();
+                ColorImage::from_rgba_unmultiplied(
+                    [shown.width() as usize, shown.height() as usize],
+                    shown.as_raw(),
+                )
+            };
             match &mut self.texture {
                 Some(tex) => {
                     tex.set(color, TextureOptions::LINEAR);
                 }
                 None => {
-                    self.texture =
-                        Some(ctx.load_texture("photo", color, TextureOptions::LINEAR));
+                    self.texture = Some(ctx.load_texture("photo", color, TextureOptions::LINEAR));
                 }
             }
             self.texture_dirty = false;
         }
         self.texture.as_ref().expect("texture just ensured")
+    }
+
+    pub fn original_texture(&mut self, ctx: &egui::Context) -> &TextureHandle {
+        if self.original_texture.is_none() {
+            let color = ColorImage::from_rgba_unmultiplied(
+                [
+                    self.original.width() as usize,
+                    self.original.height() as usize,
+                ],
+                self.original.as_raw(),
+            );
+            self.original_texture =
+                Some(ctx.load_texture("original", color, TextureOptions::LINEAR));
+        }
+        self.original_texture
+            .as_ref()
+            .expect("original texture just ensured")
     }
 
     /// Preview without the active filter, so thumbnails show the effect of

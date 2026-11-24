@@ -6,6 +6,7 @@ description = "Éditeur photo desktop local — filtres, recadrage et outils"
 authors = ["houssam"]
 
 [dependencies]
+ab_glyph = "0.2"
 eframe = { version = "0.33", default-features = true, features = ["wayland", "x11"] }
 egui = "0.33"
 env_logger = "0.11"
