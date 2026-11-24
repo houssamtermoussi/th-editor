@@ -20,11 +20,23 @@ pub fn apply(ctx: &egui::Context) {
     ctx.set_theme(egui::Theme::Dark);
     ctx.style_mut_of(egui::Theme::Dark, |style| {
         style.text_styles = [
-            (TextStyle::Heading, FontId::new(15.0, FontFamily::Proportional)),
+            (
+                TextStyle::Heading,
+                FontId::new(15.0, FontFamily::Proportional),
+            ),
             (TextStyle::Body, FontId::new(13.5, FontFamily::Proportional)),
-            (TextStyle::Button, FontId::new(13.5, FontFamily::Proportional)),
-            (TextStyle::Small, FontId::new(11.5, FontFamily::Proportional)),
-            (TextStyle::Monospace, FontId::new(12.5, FontFamily::Monospace)),
+            (
+                TextStyle::Button,
+                FontId::new(13.5, FontFamily::Proportional),
+            ),
+            (
+                TextStyle::Small,
+                FontId::new(11.5, FontFamily::Proportional),
+            ),
+            (
+                TextStyle::Monospace,
+                FontId::new(12.5, FontFamily::Monospace),
+            ),
         ]
         .into();
 
